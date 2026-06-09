@@ -68,13 +68,13 @@ function filterForMode(content, mode) {
 }
 
 // ── MCP Server factory ────────────────────────────────────────────────────────
-// Called once per SSE session (each client gets its own Server instance)
-function createServer() {
+// sessionMode: per-session override from ?mode= query param (falls back to DEFAULT_MODE)
+function createServer(sessionMode = DEFAULT_MODE) {
   const server = new Server(
     { name: 'caveman-mode', version: '0.1.0' },
     {
       capabilities: { tools: {}, resources: {}, prompts: {} },
-      instructions: `CAVEMAN MODE ACTIVE — level: ${DEFAULT_MODE}\n\n${filterForMode(SKILLS.caveman, DEFAULT_MODE)}`,
+      instructions: `CAVEMAN MODE ACTIVE — level: ${sessionMode}\n\n${filterForMode(SKILLS.caveman, sessionMode)}`,
     }
   );
 
@@ -173,9 +173,13 @@ if (STDIO) {
   const sessions = new Map();
 
   // SSE endpoint — client connects here to establish session
+  // Optional ?mode= query param sets caveman intensity for this session only.
+  // e.g. "url": "http://localhost:3100/sse?mode=ultra"
   app.get('/sse', async (req, res) => {
-    const transport = new SSEServerTransport('/messages', res);
-    const server    = createServer();
+    const qmode      = (req.query.mode || '').toLowerCase();
+    const sessionMode = VALID_MODES.includes(qmode) ? qmode : DEFAULT_MODE;
+    const transport  = new SSEServerTransport('/messages', res);
+    const server     = createServer(sessionMode);
     sessions.set(transport.sessionId, transport);
 
     res.on('close', () => sessions.delete(transport.sessionId));
@@ -192,7 +196,14 @@ if (STDIO) {
   });
 
   // Health check
-  app.get('/health', (_req, res) => res.json({ status: 'ok', mode: activeMode, server: 'caveman-mode' }));
+  app.get('/health', (_req, res) => res.json({
+    status: 'ok',
+    server: 'caveman-mode',
+    default_mode: DEFAULT_MODE,
+    valid_modes: VALID_MODES,
+    sse_endpoint: `http://localhost:${PORT}/sse`,
+    usage: `Add ?mode=<level> to SSE URL to override mode per client session`,
+  }));
 
   app.listen(PORT, () => {
     console.log(`caveman-mode MCP server running on http://localhost:${PORT}`);

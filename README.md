@@ -160,6 +160,21 @@ Server start on `http://localhost:3100`. Health check: `curl http://localhost:31
 }
 ```
 
+**Mode override per client** — append `?mode=<level>` to URL:
+
+```jsonc
+{
+  "servers": {
+    "caveman-mode": {
+      "type": "sse",
+      "url": "http://localhost:3100/sse?mode=ultra"
+    }
+  }
+}
+```
+
+Valid levels: `lite` · `full` · `ultra` · `wenyan-lite` · `wenyan-full` · `wenyan-ultra`
+
 ### Register in Claude Code
 
 `~/.claude/settings.json`:
@@ -174,6 +189,8 @@ Server start on `http://localhost:3100`. Health check: `curl http://localhost:31
   }
 }
 ```
+
+Same `?mode=` override works here too — each client can use a different level against the same running server.
 
 ### Stdio mode (client spawns server — no separate start needed)
 
