@@ -167,7 +167,8 @@ if (STDIO) {
 } else {
   // HTTP/SSE mode: Express app, each client session = new Server instance
   const app = express();
-  app.use(express.json());
+  // Do NOT use express.json() globally — SSEServerTransport.handlePostMessage
+  // reads the raw request stream itself. Pre-consuming the body causes 400.
 
   // Map sessionId → SSEServerTransport
   const sessions = new Map();
