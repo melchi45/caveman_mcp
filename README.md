@@ -230,25 +230,71 @@ MCP `initialize` handshake return `instructions` field containing caveman rules 
 | `get_current_mode` | Show active mode |
 | `deactivate_caveman` | Turn off, return to normal prose |
 
+### MCP ON vs OFF — all modes
+
+```bash
+node benchmarks/run_mcp_compare.mjs          # all 6 modes vs baseline
+node benchmarks/run_mcp_compare.mjs --mode ultra  # single mode
+```
+
+Start server, connect each mode via SSE, measure actual `instructions` payload + rule-based compression. No API key.
+
+| Mode | Sys tokens | Overhead | Avg output | Savings | Break-even |
+|---|---:|---:|---:|---:|---:|
+| ○ baseline | 7 | — | 119 | 0% | — |
+| ● lite | 519 | +512 | 116 | 3% | 171 msgs |
+| ● full | 504 | +497 | 113 | 6% | 83 msgs |
+| ● ultra | 524 | +517 | 112 | 6% | 74 msgs |
+| ● wenyan-lite | 475 | +468 | 116 | 3% | 156 msgs |
+| ● wenyan-full | 515 | +508 | 113 | 6% | 85 msgs |
+| ● wenyan-ultra | 489 | +482 | 112 | 6% | **69 msgs** |
+
+MCP overhead (~500 tokens) paid once per session. Every response after break-even is net saving.
+
+> Rule-based sim: 3–6% (code blocks preserved). Real LLM rewrites prose — actual savings **65–75%** ([benchmarks](./benchmarks/)).
+
+#### Savings per mode
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#f4a261'}}}%%
+xychart-beta
+  title "Response savings per mode (rule-based simulation, % of output tokens)"
+  x-axis ["lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"]
+  y-axis "Avg savings %" 0 --> 10
+  bar [3, 6, 6, 3, 6, 6]
+```
+
+#### Break-even: responses until MCP overhead paid back
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#2a9d8f'}}}%%
+xychart-beta
+  title "Break-even (messages, lower = better)"
+  x-axis ["lite", "full", "ultra", "wenyan-lite", "wenyan-full", "wenyan-ultra"]
+  y-axis "Messages" 0 --> 180
+  bar [171, 83, 74, 156, 85, 69]
+```
+
+`ultra` and `wenyan-ultra` reach break-even fastest. After that, every message nets tokens back.
+
 ### Mode benchmark (local, no API)
 
 ```bash
 node benchmarks/run_modes.mjs
 ```
 
-Measure system prompt token overhead + rule-based response compression across all 7 modes. No API key needed.
+Measure system prompt token overhead across all 7 modes without MCP server. No API key needed.
 
 ```
 Mode          Sys tokens  Overhead  Avg savings
 baseline           7        —           0%
-lite             519      +512          2%
+lite             519      +512          3%
 full             504      +497          6%
-ultra            524      +517          7%
+ultra            524      +517          6%
+wenyan-lite      475      +468          3%
 wenyan-full      515      +508          6%
-wenyan-ultra     489      +482          7%
+wenyan-ultra     489      +482          6%
 ```
-
-System prompt overhead (~500 tokens) paid once per session. Savings compound across every response.
 
 ## Benchmarks
 

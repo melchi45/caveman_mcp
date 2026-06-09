@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * MCP server ON vs OFF benchmark.
+ * MCP server ON vs OFF benchmark — all modes.
  *
- * 1. Spawns caveman-mode server locally
- * 2. Connects via SSE, receives actual `instructions` from initialize response
- * 3. Measures compression using those instructions as system prompt
- * 4. Kills server, measures baseline (no instructions)
- * 5. Prints comparison
+ * 1. Spawns caveman-mode server locally (once)
+ * 2. For each mode: connects via SSE, receives actual `instructions` from initialize
+ * 3. Measures rule-based compression using those instructions as system prompt
+ * 4. Measures baseline (no MCP / no instructions)
+ * 5. Prints per-mode comparison table + Mermaid chart source
  *
  * Usage:
- *   node benchmarks/run_mcp_compare.mjs [--mode ultra] [--port 3101]
+ *   node benchmarks/run_mcp_compare.mjs               # all modes
+ *   node benchmarks/run_mcp_compare.mjs --mode ultra  # single mode
+ *   node benchmarks/run_mcp_compare.mjs --port 3101
  */
 
 import { spawn }  from 'child_process';
@@ -24,10 +26,13 @@ const SERVER_BIN  = join(REPO, 'src', 'mcp-servers', 'caveman-mode', 'index.js')
 const RESULTS_DIR = join(__dirname, 'results');
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
-const args = process.argv.slice(2);
-const get  = flag => { const i = args.indexOf(flag); return i !== -1 ? args[i+1] : null; };
-const MODE = get('--mode') || 'ultra';
-const PORT = +(get('--port') || 3101);
+const args   = process.argv.slice(2);
+const getArg = flag => { const i = args.indexOf(flag); return i !== -1 ? args[i+1] : null; };
+const PORT   = +(getArg('--port') || 3101);
+const SINGLE = getArg('--mode');
+
+const ALL_MODES = ['lite','full','ultra','wenyan-lite','wenyan-full','wenyan-ultra'];
+const MODES = SINGLE ? [SINGLE] : ALL_MODES;
 
 // ── Token approximation ───────────────────────────────────────────────────────
 const approxTokens = s => Math.round(s.length / 4);
@@ -46,8 +51,8 @@ const SAMPLES = [
   { id: 'error-boundary',         text: `Here is a complete error boundary implementation:\n\`\`\`jsx\nclass ErrorBoundary extends React.Component {\n  state = { hasError: false, error: null };\n  static getDerivedStateFromError(e) { return { hasError: true, error: e }; }\n  componentDidCatch(e, info) { console.error('Caught:', e, info); }\n  handleRetry = () => this.setState({ hasError: false, error: null });\n  render() {\n    if (this.state.hasError) return (\n      <div><h2>Something went wrong</h2><button onClick={this.handleRetry}>Retry</button></div>\n    );\n    return this.props.children;\n  }\n}\n\`\`\`` },
 ];
 
-// ── Rule-based compressor ─────────────────────────────────────────────────────
-const FILLER = /\b(just|really|basically|actually|simply|essentially|generally|typically|usually|often|quite|very|pretty|rather|fairly|somewhat|certainly|definitely|absolutely|clearly|obviously|of course|sure|happy to|let me|in order to|at the end of the day|in fact)\b/gi;
+// ── Rule-based compressor (mirrors server logic) ──────────────────────────────
+const FILLER   = /\b(just|really|basically|actually|simply|essentially|generally|typically|usually|often|quite|very|pretty|rather|fairly|somewhat|certainly|definitely|absolutely|clearly|obviously|of course|sure|happy to|let me|in order to|at the end of the day|in fact)\b/gi;
 const ARTICLES = /\b(a|an|the)\b/g;
 const ABBREV   = { database:'DB',authentication:'auth',configuration:'config',function:'fn',implementation:'impl',request:'req',response:'res',application:'app',environment:'env',repository:'repo',parameter:'param',error:'err' };
 
@@ -56,17 +61,17 @@ function compress(text, mode) {
   const blocks = [];
   let out = text.replace(/```[\s\S]*?```/g, m => { blocks.push(m); return `\x00${blocks.length-1}\x00`; });
   out = out.replace(FILLER, ' ');
-  if (mode !== 'lite') out = out.replace(ARTICLES, ' ');
-  if (mode === 'ultra') for (const [w,a] of Object.entries(ABBREV)) out = out.replace(new RegExp(`\\b${w}\\b`,'gi'), a);
+  if (!mode.endsWith('lite')) out = out.replace(ARTICLES, ' ');
+  if (mode.endsWith('ultra')) for (const [w,a] of Object.entries(ABBREV)) out = out.replace(new RegExp(`\\b${w}\\b`,'gi'), a);
   out = out.replace(/ {2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
   return out.replace(/\x00(\d+)\x00/g,(_,i)=>blocks[+i]);
 }
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────
-function startServer(mode, port) {
+function startServer(port) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [SERVER_BIN], {
-      env: { ...process.env, CAVEMAN_DEFAULT_MODE: mode, CAVEMAN_PORT: String(port) },
+      env: { ...process.env, CAVEMAN_PORT: String(port) },
       stdio: 'ignore',
       detached: false,
     });
@@ -74,11 +79,7 @@ function startServer(mode, port) {
 
     let attempts = 0;
     const poll = setInterval(() => {
-      if (++attempts > 30) {
-        clearInterval(poll);
-        reject(new Error('Server start timeout (9s)'));
-        return;
-      }
+      if (++attempts > 30) { clearInterval(poll); reject(new Error('Server start timeout (9s)')); return; }
       const req = http.request({ hostname: 'localhost', port, path: '/health' }, res => {
         if (res.statusCode === 200) { clearInterval(poll); resolve(proc); }
         res.resume();
@@ -101,7 +102,7 @@ function stopServer(proc) {
 // ── SSE handshake — get instructions from live server ────────────────────────
 function fetchInstructions(port, mode) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('SSE handshake timeout')), 8000);
+    const timer = setTimeout(() => reject(new Error(`SSE handshake timeout (mode=${mode})`)), 8000);
     let buf = '', sessionId = null, done = false;
 
     const sseReq = http.request(
@@ -114,18 +115,13 @@ function fetchInstructions(port, mode) {
 
           let currentEvent = null;
           for (const line of lines) {
-            if (line.startsWith('event:')) {
-              currentEvent = line.slice(6).trim();
-              continue;
-            }
+            if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue; }
             if (!line.startsWith('data:')) continue;
             const data = line.slice(5).trim();
 
-            // endpoint event: data is raw URL (not JSON)
             if (currentEvent === 'endpoint' && !sessionId) {
               try {
                 sessionId = new URL('http://localhost' + data).searchParams.get('sessionId');
-                // POST initialize
                 const body = JSON.stringify({ jsonrpc:'2.0', id:1, method:'initialize',
                   params:{ protocolVersion:'2024-11-05', capabilities:{}, clientInfo:{ name:'bench', version:'1' } } });
                 const post = http.request({
@@ -139,14 +135,11 @@ function fetchInstructions(port, mode) {
               continue;
             }
 
-            // message event: data is JSON — check for initialize result
             if (currentEvent === 'message' && !done) {
               try {
                 const d = JSON.parse(data);
                 if (d.result?.instructions) {
-                  done = true;
-                  clearTimeout(timer);
-                  sseReq.destroy();
+                  done = true; clearTimeout(timer); sseReq.destroy();
                   resolve(d.result.instructions);
                 }
               } catch {}
@@ -165,67 +158,96 @@ function fetchInstructions(port, mode) {
 function measure(label, sysPrompt, compressMode) {
   const sysTokens = approxTokens(sysPrompt);
   const rows = SAMPLES.map(s => {
-    const out = compress(s.text, compressMode);
+    const out  = compress(s.text, compressMode);
     const base = approxTokens(s.text);
     const tok  = approxTokens(out);
     return { id: s.id, base_tokens: base, out_tokens: tok, savings: +(1 - tok/base).toFixed(3) };
   });
   const avg = a => a.reduce((x,y)=>x+y,0)/a.length;
-  return { label, sys_tokens: sysTokens, avg_out_tokens: Math.round(avg(rows.map(r=>r.out_tokens))), avg_savings_pct: Math.round(avg(rows.map(r=>r.savings))*100), rows };
+  return {
+    label,
+    sys_tokens:       sysTokens,
+    avg_out_tokens:   Math.round(avg(rows.map(r=>r.out_tokens))),
+    avg_savings_pct:  Math.round(avg(rows.map(r=>r.savings))*100),
+    rows,
+  };
+}
+
+// ── ASCII bar chart ───────────────────────────────────────────────────────────
+function bar(pct, max = 15) {
+  const filled = Math.round((pct / 10) * max);
+  return '█'.repeat(filled) + '░'.repeat(max - filled);
 }
 
 // ── Print ─────────────────────────────────────────────────────────────────────
-function print(on, off) {
-  console.log('\n══════════════════════════════════════════════════════');
-  console.log('  caveman-mode MCP  ●ON  vs  ○OFF  benchmark');
-  console.log('══════════════════════════════════════════════════════\n');
+function printAll(baseline, results) {
+  console.log('\n══════════════════════════════════════════════════════════════');
+  console.log('  caveman-mode MCP — mode comparison vs baseline');
+  console.log('══════════════════════════════════════════════════════════════\n');
 
-  console.log('## 1. System prompt (MCP instructions field)');
-  console.log(`  ○ OFF (baseline)    : ${off.sys_tokens.toString().padStart(4)} tokens`);
-  console.log(`  ● ON  (${on.label.padEnd(8)})  : ${on.sys_tokens.toString().padStart(4)} tokens  (+${on.sys_tokens - off.sys_tokens} overhead)\n`);
+  const W = 14;
+  const hdr = ['Mode','Sys tokens','Overhead','Avg output','Savings','Break-even'];
+  console.log(`  ${'Mode'.padEnd(W)} ${'Sys tok'.padStart(8)} ${'Overhead'.padStart(9)} ${'Avg out'.padStart(9)} ${'Savings'.padStart(8)} ${'Break-even'.padStart(11)}`);
+  console.log('  ' + '─'.repeat(W) + ' ' + '─'.repeat(8) + ' ' + '─'.repeat(9) + ' ' + '─'.repeat(9) + ' ' + '─'.repeat(8) + ' ' + '─'.repeat(11));
 
-  console.log('## 2. Response compression per sample');
-  console.log('| Prompt | ○ OFF | ● ON | Saved |');
-  console.log('|---|---:|---:|---:|');
-  for (let i = 0; i < on.rows.length; i++) {
-    const r = on.rows[i], b = off.rows[i];
-    console.log(`| ${r.id.replace(/-/g,' ')} | ${b.out_tokens} | ${r.out_tokens} | ${(r.savings*100)|0}% |`);
+  // baseline row
+  console.log(`  ${'○ baseline'.padEnd(W)} ${String(baseline.sys_tokens).padStart(8)} ${'—'.padStart(9)} ${String(baseline.avg_out_tokens).padStart(9)} ${'0%'.padStart(8)} ${'—'.padStart(11)}`);
+
+  for (const r of results) {
+    const overhead    = r.sys_tokens - baseline.sys_tokens;
+    const savingPerMsg = baseline.avg_out_tokens - r.avg_out_tokens;
+    const breakeven   = savingPerMsg > 0 ? Math.ceil(overhead / savingPerMsg) + ' msgs' : '∞';
+    console.log(
+      `  ${'● ' + r.label.padEnd(W-2)} ${String(r.sys_tokens).padStart(8)} ${('+'+overhead).padStart(9)} ${String(r.avg_out_tokens).padStart(9)} ${(r.avg_savings_pct+'%').padStart(8)} ${breakeven.padStart(11)}`
+    );
   }
-  console.log(`| **Average** | **${off.avg_out_tokens}** | **${on.avg_out_tokens}** | **${on.avg_savings_pct}%** |`);
 
-  const overhead     = on.sys_tokens - off.sys_tokens;
-  const savingPerMsg = off.avg_out_tokens - on.avg_out_tokens;
-  const breakeven    = savingPerMsg > 0 ? Math.ceil(overhead / savingPerMsg) : '∞';
+  console.log('\n── Savings % per mode (rule-based simulation) ──\n');
+  for (const r of results) {
+    const pct = r.avg_savings_pct;
+    console.log(`  ${r.label.padEnd(14)} ${bar(pct)} ${pct}%`);
+  }
 
-  console.log('\n## 3. Session economics');
-  console.log(`  MCP overhead (one-time) : +${overhead} tokens`);
-  console.log(`  Saving per response     : -${savingPerMsg} tokens`);
-  console.log(`  Break-even              : ${breakeven} responses`);
-  console.log(`  After break-even        : net savings every message`);
+  console.log('\n── Break-even: responses until MCP overhead paid back ──\n');
+  for (const r of results) {
+    const overhead    = r.sys_tokens - baseline.sys_tokens;
+    const savingPerMsg = baseline.avg_out_tokens - r.avg_out_tokens;
+    const be          = savingPerMsg > 0 ? Math.ceil(overhead / savingPerMsg) : 999;
+    const barLen      = Math.round((be / 110) * 20);
+    console.log(`  ${r.label.padEnd(14)} ${'▓'.repeat(Math.min(barLen,20))}${'░'.repeat(Math.max(0,20-barLen))} ${be === 999 ? '∞' : be + ' msgs'}`);
+  }
+
   console.log('\n> Rule-based simulation (chars/4 ≈ tokens). Code blocks preserved.');
   console.log('> Real LLM savings: 65-75% (requires ANTHROPIC_API_KEY).\n');
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-console.log(`\nStarting caveman-mode MCP server  mode=${MODE}  port=${PORT} ...`);
+console.log(`\nStarting caveman-mode MCP server  modes=[${MODES.join(',')}]  port=${PORT} ...`);
+
 let proc;
 try {
-  proc = await startServer(MODE, PORT);
-  console.log(`Server started  (PID ${proc.pid})`);
+  proc = await startServer(PORT);
+  console.log(`Server started  (PID ${proc.pid})\n`);
 
-  console.log('SSE handshake — fetching instructions ...');
-  const instructions = await fetchInstructions(PORT, MODE);
-  console.log(`Instructions received  (${approxTokens(instructions)} tokens)\n`);
+  // baseline (no MCP)
+  const baseline = measure('baseline', 'You are a helpful assistant.', 'baseline');
+  console.log(`  baseline measured: ${baseline.sys_tokens} sys tokens, ${baseline.avg_out_tokens} avg out tokens`);
 
-  const on  = measure(MODE,       instructions,                   MODE);
-  const off = measure('baseline', 'You are a helpful assistant.', 'baseline');
+  const results = [];
+  for (const mode of MODES) {
+    process.stdout.write(`  ${mode.padEnd(14)} fetching instructions ... `);
+    const instructions = await fetchInstructions(PORT, mode);
+    const r = measure(mode, instructions, mode);
+    results.push(r);
+    console.log(`${r.sys_tokens} sys tokens, ${r.avg_savings_pct}% avg savings`);
+  }
 
-  print(on, off);
+  printAll(baseline, results);
 
   mkdirSync(RESULTS_DIR, { recursive: true });
   const ts   = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
   const path = join(RESULTS_DIR, `benchmark_mcp_compare_${ts}.json`);
-  writeFileSync(path, JSON.stringify({ mode: MODE, on, off }, null, 2));
+  writeFileSync(path, JSON.stringify({ baseline, modes: results }, null, 2));
   console.log(`Results saved: ${path}`);
 
 } finally {
