@@ -121,11 +121,117 @@ Install break? Open agent, say *"Read CLAUDE.md and INSTALL.md, install caveman 
 | `/caveman-stats` | Real session token usage + lifetime savings + USD. Tweetable line via `--share`. |
 | `/caveman-compress <file>` | Rewrite memory file (e.g. `CLAUDE.md`) into caveman-speak. Cuts ~46% input tokens every session. Code/URLs/paths byte-preserved. |
 | `caveman-shrink` | MCP middleware. Wraps any MCP server, compresses tool descriptions. [npm](https://www.npmjs.com/package/caveman-shrink). |
+| `caveman-mode` | MCP server (HTTP/SSE). No install — just start server, register URL. Works with VS Code Copilot, Claude Code, Cursor, any MCP client. |
 | `cavecrew-*` | Caveman subagents (investigator/builder/reviewer). ~60% fewer tokens than vanilla, main context lasts longer. |
 
 **Statusline badge** — Claude Code shows `[CAVEMAN] ⛏ 12.4k` (lifetime tokens saved). Updates every `/caveman-stats` run. Set `CAVEMAN_STATUSLINE_SAVINGS=0` to silence.
 
 Auto-activate every session: Claude Code, Codex, Gemini (built-in). Cursor / Windsurf / Cline / Copilot get always-on rule files via `--with-init`. Other agents trigger with `/caveman` per session. Full feature matrix in [INSTALL.md](./INSTALL.md#what-you-get).
+
+## MCP Server — Zero Install
+
+No hooks. No shell scripts. No plugin system. Start one server, register URL in config. Every MCP client get caveman.
+
+### Start server
+
+```bash
+# clone or npx
+node src/mcp-servers/caveman-mode/index.js
+
+# custom port or mode
+node src/mcp-servers/caveman-mode/index.js --port 4000
+CAVEMAN_DEFAULT_MODE=ultra node src/mcp-servers/caveman-mode/index.js
+```
+
+Server start on `http://localhost:3100`. Health check: `curl http://localhost:3100/health`.
+
+### Register in VS Code Copilot
+
+`%APPDATA%\Code - Insiders\User\mcp.json` (Windows) or `~/.config/Code/User/mcp.json` (Linux/Mac):
+
+```jsonc
+{
+  "servers": {
+    "caveman-mode": {
+      "type": "sse",
+      "url": "http://localhost:3100/sse"
+    }
+  }
+}
+```
+
+### Register in Claude Code
+
+`~/.claude/settings.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "caveman-mode": {
+      "type": "sse",
+      "url": "http://localhost:3100/sse"
+    }
+  }
+}
+```
+
+### Stdio mode (client spawns server — no separate start needed)
+
+```jsonc
+{
+  "servers": {
+    "caveman-mode": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/caveman_mcp/src/mcp-servers/caveman-mode/index.js", "--stdio"],
+      "env": {
+        "CAVEMAN_DEFAULT_MODE": "ultra"
+      }
+    }
+  }
+}
+```
+
+Stdio mode support `env` field — change default mode per client config without touching server.
+
+### How it work
+
+MCP `initialize` handshake return `instructions` field containing caveman rules for active mode. Client inject as system context — caveman active from message one. No `/caveman` command needed.
+
+| Transport | When use |
+|---|---|
+| **HTTP/SSE** (default) | Server run separately, multiple clients share one process |
+| **stdio** | Client spawn server as subprocess, `env` vars work in config |
+
+### Tools available after connect
+
+| Tool | What |
+|---|---|
+| `activate_caveman(mode?)` | Switch intensity level mid-session |
+| `get_commit_rules` | Fetch caveman commit style rules |
+| `get_review_rules` | Fetch caveman code review rules |
+| `get_current_mode` | Show active mode |
+| `deactivate_caveman` | Turn off, return to normal prose |
+
+### Mode benchmark (local, no API)
+
+```bash
+node benchmarks/run_modes.mjs
+```
+
+Measure system prompt token overhead + rule-based response compression across all 7 modes. No API key needed.
+
+```
+Mode          Sys tokens  Overhead  Avg savings
+baseline           7        —           0%
+lite             519      +512          2%
+full             504      +497          6%
+ultra            524      +517          7%
+wenyan-full      515      +508          6%
+wenyan-ultra     489      +482          7%
+```
+
+System prompt overhead (~500 tokens) paid once per session. Savings compound across every response.
 
 ## Benchmarks
 
