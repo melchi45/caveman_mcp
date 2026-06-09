@@ -32,5 +32,9 @@
     "dist/caveman.skill",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
+    "gpt-tokenizer": "^3.4.0"
+  }
 }
