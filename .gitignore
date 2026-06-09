@@ -13,3 +13,7 @@ context/refs/research-brief-caveman-code-efficiency.md
 # Build artifacts
 dist/*
 !dist/caveman.skill
+
+# MCP server dependencies
+src/mcp-servers/*/node_modules/
+src/mcp-servers/*/package-lock.json

@@ -13,7 +13,8 @@
     "url": "https://github.com/JuliusBrussee/caveman/issues"
   },
   "bin": {
-    "caveman": "./bin/install.js"
+    "caveman": "./bin/install.js",
+    "caveman-mode": "./src/mcp-servers/caveman-mode/index.js"
   },
   "engines": {
     "node": ">=18"
