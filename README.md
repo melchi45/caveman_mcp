@@ -135,15 +135,46 @@ No hooks. No shell scripts. No plugin system. Start one server, register URL in 
 ### Start server
 
 ```bash
-# clone or npx
+# foreground (logs visible)
 node src/mcp-servers/caveman-mode/index.js
 
-# custom port or mode
+# background (keep running after terminal close)
+nohup node src/mcp-servers/caveman-mode/index.js > /tmp/caveman-mcp.log 2>&1 &
+echo $! > /tmp/caveman-mcp.pid
+
+# custom port
 node src/mcp-servers/caveman-mode/index.js --port 4000
+
+# custom default mode
 CAVEMAN_DEFAULT_MODE=ultra node src/mcp-servers/caveman-mode/index.js
 ```
 
-Server start on `http://localhost:3100`. Health check: `curl http://localhost:3100/health`.
+### Check server status
+
+```bash
+# health check
+curl http://localhost:3100/health
+
+# check if running
+ss -tlnp | grep 3100
+# or
+lsof -i :3100
+```
+
+### Stop server
+
+```bash
+# if started with nohup + pid file
+kill $(cat /tmp/caveman-mcp.pid)
+
+# find and kill by port
+kill $(lsof -t -i :3100)
+
+# force kill
+kill -9 $(lsof -t -i :3100)
+```
+
+Server starts on `http://localhost:3100` by default.
 
 ### Register in VS Code Copilot
 
