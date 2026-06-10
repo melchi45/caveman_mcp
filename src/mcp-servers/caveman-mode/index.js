@@ -15,8 +15,9 @@
  */
 
 import { Server }              from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport }   from '@modelcontextprotocol/sdk/server/sse.js';
+import { StdioServerTransport }        from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport }          from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -196,7 +197,26 @@ if (STDIO) {
     await server.connect(transport);
   });
 
-  // POST endpoint — client sends JSON-RPC messages here
+  // POST /sse — StreamableHTTP transport (newer MCP protocol)
+  // VS Code tries POST /sse before falling back to legacy SSE GET.
+  app.post('/sse', (req, res, next) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => { raw += chunk; });
+    req.on('end', async () => {
+      try {
+        const body = raw ? JSON.parse(raw) : undefined;
+        const qmode = (req.query.mode || '').toLowerCase();
+        const sessionMode = VALID_MODES.includes(qmode) ? qmode : DEFAULT_MODE;
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        const server = createServer(sessionMode);
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+      } catch (e) { next(e); }
+    });
+  });
+
+  // POST endpoint — legacy SSE: client sends JSON-RPC messages here
   app.post('/messages', async (req, res) => {
     const { sessionId } = req.query;
     const transport = sessions.get(sessionId);
