@@ -183,7 +183,15 @@ if (STDIO) {
     const server     = createServer(sessionMode);
     sessions.set(transport.sessionId, transport);
 
-    res.on('close', () => sessions.delete(transport.sessionId));
+    // Heartbeat every 25s — prevents proxy/OS from closing idle SSE connections
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(': ping\n\n');
+    }, 25000);
+
+    res.on('close', () => {
+      clearInterval(heartbeat);
+      sessions.delete(transport.sessionId);
+    });
 
     await server.connect(transport);
   });
