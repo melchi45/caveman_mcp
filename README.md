@@ -149,6 +149,44 @@ node src/mcp-servers/caveman-mode/index.js --port 4000
 CAVEMAN_DEFAULT_MODE=ultra node src/mcp-servers/caveman-mode/index.js
 ```
 
+Server start on **HTTP `:3100`** and **HTTPS `:3101`** by default.
+
+**HTTPS** — self-signed certificate auto-generated on first start, stored at `~/.local/share/caveman-mcp/`. No setup needed.
+
+```bash
+# HTTPS only (no HTTP)
+node src/mcp-servers/caveman-mode/index.js --no-http
+
+# custom HTTPS port
+node src/mcp-servers/caveman-mode/index.js --https-port 8443
+
+# bring your own certificate
+CAVEMAN_TLS_CERT=/path/to/cert.pem CAVEMAN_TLS_KEY=/path/to/key.pem \
+  node src/mcp-servers/caveman-mode/index.js
+```
+
+| Env var | Default | What |
+|---|---|---|
+| `CAVEMAN_PORT` | `3100` | HTTP port |
+| `CAVEMAN_HTTPS_PORT` | `3101` | HTTPS port |
+| `CAVEMAN_TLS_CERT` | `~/.local/share/caveman-mcp/server.crt` | TLS certificate (PEM) |
+| `CAVEMAN_TLS_KEY` | `~/.local/share/caveman-mcp/server.key` | TLS private key (PEM) |
+
+Register HTTPS endpoint same as HTTP — just swap scheme:
+
+```jsonc
+{
+  "mcpServers": {
+    "caveman-mode": {
+      "type": "sse",
+      "url": "https://localhost:3101/sse"
+    }
+  }
+}
+```
+
+> Self-signed cert trigger browser warning. For production, set `CAVEMAN_TLS_CERT` / `CAVEMAN_TLS_KEY` to CA-signed cert paths.
+
 ### Check server status
 
 ```bash
@@ -174,7 +212,42 @@ kill $(lsof -t -i :3100)
 kill -9 $(lsof -t -i :3100)
 ```
 
-Server starts on `http://localhost:3100` by default.
+### Run as system service (Linux)
+
+Keep server alive across reboots and auto-restart on crash — no manual `nohup` needed.
+
+**Install init.d service:**
+
+```bash
+sudo cp /tmp/caveman-mcp /etc/init.d/caveman-mcp
+sudo chmod +x /etc/init.d/caveman-mcp
+sudo update-rc.d caveman-mcp defaults   # enable on boot
+```
+
+**Manage:**
+
+```bash
+sudo /etc/init.d/caveman-mcp start    # start
+sudo /etc/init.d/caveman-mcp stop     # stop
+sudo /etc/init.d/caveman-mcp restart  # restart
+/etc/init.d/caveman-mcp status        # check (no sudo needed)
+```
+
+`status` show PID + live health JSON. Script detect running process by name — no stale PID file problem.
+
+**Watchdog (crontab)** — auto-restart if server die between init.d cycles:
+
+```bash
+# already installed — check with:
+crontab -l | grep caveman
+# → * * * * * /path/to/caveman_mcp/src/mcp-servers/caveman-mode/watchdog.sh
+```
+
+Watchdog hit `/health` every minute. No response → kill stale process + restart. Log to `/var/log/caveman-mcp.log`.
+
+```bash
+tail -f /var/log/caveman-mcp.log   # watch live
+```
 
 ### Register in VS Code Copilot
 
@@ -260,6 +333,53 @@ MCP `initialize` handshake return `instructions` field containing caveman rules 
 | `get_review_rules` | Fetch caveman code review rules |
 | `get_current_mode` | Show active mode |
 | `deactivate_caveman` | Turn off, return to normal prose |
+| `record_usage(...)` | Report actual token counts — feeds dashboard |
+
+### Dashboard — real token savings per IP
+
+Server track actual token usage and show savings by source IP. No guessing — real API numbers.
+
+Open dashboard in browser:
+
+```
+http://localhost:3100/dashboard
+https://localhost:3101/dashboard   # HTTPS
+```
+
+Auto-refresh every 30 seconds. Shows:
+
+- **Summary cards** — total requests, output tokens saved, unique IPs, caveman-off baseline requests
+- **By source IP** — sessions, on/off request counts, input tokens, output tokens saved, savings %, last seen
+- **By mode** — request count + estimated savings per intensity level
+- **Recent activity** — last 50 records with timestamp, IP, mode, token counts
+
+Savings column shows `measured` badge when IP has both caveman-on and caveman-off data (real comparison). Shows `estimated` badge when only caveman-on data available (uses benchmark ratios: lite 3%, full/ultra 6%).
+
+**Feed the dashboard** — call `record_usage` after each API response:
+
+```jsonc
+// tool call from your hook or client
+{
+  "name": "record_usage",
+  "arguments": {
+    "input_tokens": 450,    // from API response usage.input_tokens
+    "output_tokens": 95,    // from API response usage.output_tokens
+    "caveman_on": true,     // whether caveman was active
+    "mode": "full"          // active mode (optional, defaults to session mode)
+  }
+}
+```
+
+Pass `caveman_on: false` when recording baseline (caveman off) — dashboard use both ON + OFF data from same IP to compute real measured savings.
+
+Stats persist to `~/.local/share/caveman-mcp/stats.json` — survive server restart.
+
+Raw stats as JSON:
+
+```bash
+curl http://localhost:3100/stats
+curl -k https://localhost:3101/stats
+```
 
 ### MCP ON vs OFF — all modes
 
