@@ -346,7 +346,7 @@ http://localhost:3100/dashboard
 https://localhost:3101/dashboard   # HTTPS
 ```
 
-Auto-refresh every 30 seconds. Shows:
+Live refresh every 1 second. Time range tabs: **ALL / 1Y / 1M / 1W / 1D**. All timestamps in browser local time. Shows:
 
 - **Summary cards** — total requests, output tokens saved, unique IPs, caveman-off baseline requests
 - **By source IP** — sessions, on/off request counts, input tokens, output tokens saved, savings %, last seen
@@ -355,31 +355,73 @@ Auto-refresh every 30 seconds. Shows:
 
 Savings column shows `measured` badge when IP has both caveman-on and caveman-off data (real comparison). Shows `estimated` badge when only caveman-on data available (uses benchmark ratios: lite 3%, full/ultra 6%).
 
-**Feed the dashboard** — call `record_usage` after each API response:
+**Auto-recording (Stop hook)** — `src/hooks/caveman-usage-reporter.js` fires after every Claude Code response, reads session transcript, POSTs token counts to `/record`. Installed automatically — no manual `record_usage` calls needed.
+
+**Manual feed** — or call `record_usage` tool directly from your hook/client:
 
 ```jsonc
-// tool call from your hook or client
 {
   "name": "record_usage",
   "arguments": {
-    "input_tokens": 450,    // from API response usage.input_tokens
-    "output_tokens": 95,    // from API response usage.output_tokens
-    "caveman_on": true,     // whether caveman was active
-    "mode": "full"          // active mode (optional, defaults to session mode)
+    "input_tokens": 450,
+    "output_tokens": 95,
+    "caveman_on": true,
+    "mode": "full"
   }
 }
 ```
 
-Pass `caveman_on: false` when recording baseline (caveman off) — dashboard use both ON + OFF data from same IP to compute real measured savings.
+Pass `caveman_on: false` when recording baseline — dashboard use both ON + OFF data from same IP to compute real measured savings.
 
-Stats persist to `~/.local/share/caveman-mcp/stats.json` — survive server restart.
-
-Raw stats as JSON:
+Raw stats as JSON (time range optional):
 
 ```bash
-curl http://localhost:3100/stats
-curl -k https://localhost:3101/stats
+curl http://localhost:3100/stats               # all time
+curl http://localhost:3100/stats?range=1d      # last 24h
+curl http://localhost:3100/stats?range=1w      # last 7 days
+curl -k https://localhost:3101/stats?range=1m  # HTTPS, last month
 ```
+
+### Server config file
+
+Config auto-created on first start at `~/.local/share/caveman-mcp/server.config.json`:
+
+```json
+{
+  "port": 3100,
+  "httpsPort": 3101,
+  "defaultMode": "full",
+  "storage": {
+    "type": "json",
+    "jsonFile": "~/.local/share/caveman-mcp/stats.json",
+    "maxJsonRecords": 50000,
+    "mongoUrl": "mongodb://localhost:27017",
+    "mongoDb": "caveman_mcp",
+    "mongoCollection": "records"
+  }
+}
+```
+
+Override config path with `CAVEMAN_CONFIG=/path/to/config.json`.
+
+**Switch to MongoDB** — edit config and restart:
+
+```json
+{
+  "storage": {
+    "type": "mongodb",
+    "mongoUrl": "mongodb://localhost:27017"
+  }
+}
+```
+
+Or via env var (no config edit needed):
+
+```bash
+CAVEMAN_MONGO_URL=mongodb://localhost:27017 node src/mcp-servers/caveman-mode/index.js
+```
+
+MongoDB stores every record individually — enables accurate per-period aggregation. Falls back to JSON if MongoDB unavailable. Stats persist across restarts regardless of backend.
 
 ### MCP ON vs OFF — all modes
 
